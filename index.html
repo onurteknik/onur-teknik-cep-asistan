@@ -388,44 +388,64 @@ function exportPCDate(){const d=formVal('pcDate');const rows=state.serviceRecord
 function openQuickAdd(){if(!emp())return openLogin();const buttons=[];if(can('createAppointment'))buttons.push(`<button class="btn red" onclick="openAppointmentForm()">Yeni Randevu</button>`);if(can('customerSearch'))buttons.push(`<button class="btn" onclick="openSmartCall()">Akıllı Çağrı / Görüşme Özeti</button>`);if(can('completeService'))buttons.push(`<button class="btn" onclick="openStandaloneService()">Yeni Servis Kaydı</button>`);if(can('customerSearch'))buttons.push(`<button class="btn light" onclick="openCustomerSearch()">Müşteri Ara</button>`);openSheet('Hızlı İşlem',`<div class="actions" style="flex-direction:column">${buttons.join('')||'<div class="notice">Bu kullanıcı için hızlı kayıt menüsü kapalı.</div>'}</div>`)}
 function openSyncSheet(){if(!isAdmin())return;openSheet('Ortak Telefon Senkronu',`<div class="notice info"><b>Onur Teknik bulut ayarları hazır.</b><br>Telefon buluta otomatik bağlanır. Firebase şifresi telefona yazılmaz ve istenmez.</div><label>Çalışma kodu</label><input value="ONURTEKNIK" disabled><label>Bağlantı yöntemi</label><input value="Otomatik güvenli oturum" disabled><div id="cloudDiag" style="display:none;margin-top:12px;padding:12px;border-radius:12px;background:#111827;color:#fff;white-space:pre-wrap;font:600 13px/1.45 system-ui"></div><div class="actions"><button class="btn red" onclick="runCloudDiagnostic()">Bulut Bağlantısını Kontrol Et</button></div>`) }
 
+function withCloudTimeout(promise,ms,label){
+ return Promise.race([
+  promise,
+  new Promise((_,reject)=>setTimeout(()=>reject(new Error('ZAMAN_ASIMI: '+label)),ms))
+ ])
+}
+async function ensureFirebaseLoaded(){
+ if(window.firebase)return;
+ await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js'),12000,'Firebase uygulama dosyası');
+ await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js'),12000,'Firebase giriş dosyası');
+ await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js'),12000,'Firebase veritabanı dosyası');
+}
+async function connectCloudCore(statusCb){
+ const tell=t=>{try{statusCb&&statusCb(t)}catch{}};
+ if(!cloudConfig.apiKey||!cloudConfig.databaseURL)throw new Error('Bulut ayarları eksik');
+ tell('1/4 Firebase hazırlanıyor...');
+ await ensureFirebaseLoaded();
+ if(!firebase.apps.length)firebase.initializeApp(cloudConfig);
+ const auth=firebase.auth();
+ tell('2/4 Güvenli oturum açılıyor...');
+ await withCloudTimeout(auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL),8000,'Oturum hazırlama');
+ if(!auth.currentUser)await withCloudTimeout(auth.signInAnonymously(),12000,'Anonim Firebase girişi');
+ tell('3/4 Ortak stok okunuyor...');
+ cloud=firebase.database().ref('workspaces/'+(cloudConfig.workspace||'ONURTEKNIK'));
+ const stockSnap=await withCloudTimeout(cloud.child('stock').once('value'),12000,'Ortak stok okuma');
+ remoteReady=true; setSync('on','Bulut bağlantısı açık');
+ tell('4/4 Bağlantı açık ✓');
+ return stockSnap;
+}
 async function runCloudDiagnostic(){
  const box=document.getElementById('cloudDiag'); if(!box)return;
- box.style.display='block'; box.textContent='Bulut bağlantısı kontrol ediliyor...';
- await initCloud();
- if(!remoteReady){box.textContent='BAĞLANTI KURULAMADI\nÜstteki bulut durumuna bakın.';return}
+ box.style.display='block';
  try{
-   const a=await cloud.child('stock').once('value');
-   box.textContent='BULUT BAĞLANTISI AÇIK ✓\nStok okuma: '+(a.exists()?'BAŞARILI ✓':'Kayıt yok')+'\nŞifre girişi gerekmiyor.';
- }catch(e){box.textContent='BULUT OKUMA HATASI\n'+String(e?.code||'')+'\n'+String(e?.message||e)}
+  const a=await connectCloudCore(t=>box.textContent=t);
+  box.textContent='BULUT BAĞLANTISI AÇIK ✓\nStok okuma: '+(a.exists()?'BAŞARILI ✓':'Kayıt yok')+'\nOtomatik oturum: BAŞARILI ✓';
+ }catch(e){
+  remoteReady=false;setSync('err','Bulut bağlantısı kurulamadı');
+  const code=String(e?.code||''); const msg=String(e?.message||e);
+  box.textContent='BAĞLANTI HATASI\n'+(code?code+'\n':'')+msg+'\n\nBu mesajı fotoğraf olarak gönderin.';
+ }
 }
 function saveCloudConfig(){closeSheet();initCloud()}
 function setSync(cls,text){syncStatus.innerHTML=`<span class="syncdot ${cls||''}"></span>${esc(text)}`}
-function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+function loadScript(src){return new Promise((res,rej)=>{const old=[...document.scripts].find(x=>x.src===src);if(old){if(window.firebase)return res();old.addEventListener('load',res,{once:true});old.addEventListener('error',rej,{once:true});return}const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Dosya yüklenemedi: '+src));document.head.appendChild(s)})}
 async function initCloud(){
- if(!cloudConfig.apiKey||!cloudConfig.databaseURL){remoteReady=false;setSync('','Bulut bağlantısı kapalı');return}
  try{
-  if(!window.firebase){await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js')}
-  if(!firebase.apps.length)firebase.initializeApp(cloudConfig);
-  const auth=firebase.auth(); await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-  // Mevcut geçerli oturumu koru; oturum yoksa anonim olarak otomatik bağlan.
-  if(!auth.currentUser)await auth.signInAnonymously();
-  cloud=firebase.database().ref('workspaces/'+(cloudConfig.workspace||'ONURTEKNIK'));
-  // İlk okuma gerçekten başarılı olmadan "bağlı" deme.
-  await cloud.child('stock').once('value');
-  remoteReady=true;setSync('on','Bulut bağlantısı açık');
+  await connectCloudCore();
   const sections=['employees','customers','firms','appointments','serviceRecords','stock','stockMovements','vehicleLoans','attendance','managerEvents','maintenanceReminders','financeQueue','receivablesQueue','pendingTransferQueue','firmMovementsQueue'];
   for(const section of sections){
+   cloud.child(section).off('value');
    cloud.child(section).on('value',snap=>{let arr=Object.values(snap.val()||{});if(section==='stock')arr=normalizeCloudStock(arr);if(arr.length||snap.exists()){state[section]=arr;state.employees.forEach(e=>{if(!e.permissions)e.permissions=e.role==='admin'?ALL_PERMS:(e.name?.toLowerCase()==='talha'?TALHA_PERMS:LIMITED_PERMS)});saveLocal();renderAll()}});
-   const sec=await cloud.child(section).once('value');
-   if(section!=='stock'&&!sec.exists()&&state[section]?.length){for(const r of state[section])await cloud.child(section+'/'+r.id).set(r)}
   }
+  cloud.child('settings').off('value');
   cloud.child('settings').on('value',x=>{if(x.exists()){state.settings={...state.settings,...x.val()};saveLocal();renderHeader()}});
-  const ss=await cloud.child('settings').once('value');if(!ss.exists())await cloud.child('settings').set(state.settings)
  }catch(e){
   console.error('Firebase bağlantı hatası',e);remoteReady=false;
-  const code=String(e?.code||'BILINMEYEN'),msg=String(e?.message||'');
-  if(code.includes('permission-denied'))setSync('err','Bulut erişim izni yok');else setSync('err','Bulut bağlantısı kurulamadı');
-  try{alert('Bulut bağlantısı kurulamadı\n'+code+'\n'+msg)}catch{}
+  const code=String(e?.code||''),msg=String(e?.message||e);
+  if(code.includes('permission-denied'))setSync('err','Bulut erişim izni yok');else if(msg.includes('ZAMAN_ASIMI'))setSync('err','Bulut bağlantısı zaman aşımı');else setSync('err','Bulut bağlantısı kurulamadı');
  }
 }
 function renderAll(){syncStockForCurrentUser();renderHeader();renderAttendance();renderHome();renderAppointments();renderServices();renderStock();renderMore()}
