@@ -98,21 +98,29 @@ function currentName(){return emp()?.name||''}
 // Onur Teknik'te tek servis aracı vardır. Ekranda görünen araç adedi ile servis düşümü aynı kaynağı kullanır.
 function serviceVehicleQty(p){
  if(!p)return 0;
- const person=currentName()||'';
+ // Servis formunda gösterilen Araç adedi p.vehicle alanıdır.
+ // Tamamlama kontrolü de kesinlikle aynı görünen adedi kullanır.
+ const shown=Number(p.vehicle);
+ if(Number.isFinite(shown) && shown>0)return Math.max(0,shown);
+ const person=(currentName()||'').trim();
  const vs=p.vehicles||{};
- // Serviste ekranda hangi personel açıksa yalnız o kişinin araç stoğu kullanılır.
  if(person && Object.prototype.hasOwnProperty.call(vs,person))return Math.max(0,Number(vs[person]||0));
- // Eski kayıtlarda vehicles alanı yoksa geriye dönük vehicle alanını kullan.
+ // İsimde rol/ek bilgi varsa (örn. Osman - Yönetici) Osman anahtarını bul.
+ const pn=person.toLocaleLowerCase('tr-TR');
+ const fuzzy=Object.keys(vs).find(k=>{const kn=String(k).trim().toLocaleLowerCase('tr-TR');return kn===pn || pn.startsWith(kn+' ') || pn.startsWith(kn+' -') || pn.startsWith(kn+' ·') || kn.startsWith(pn+' ')});
+ if(fuzzy)return Math.max(0,Number(vs[fuzzy]||0));
  return Math.max(0,Number(p.vehicle||0));
 }
 function serviceVehicleKey(p){
  const vs=p?.vehicles||{};
- const person=currentName()||'';
+ const person=(currentName()||'').trim();
  if(person && Object.prototype.hasOwnProperty.call(vs,person))return person;
+ const pn=person.toLocaleLowerCase('tr-TR');
+ const fuzzy=Object.keys(vs).find(k=>{const kn=String(k).trim().toLocaleLowerCase('tr-TR');return kn===pn || pn.startsWith(kn+' ') || pn.startsWith(kn+' -') || pn.startsWith(kn+' ·') || kn.startsWith(pn+' ')});
+ if(fuzzy)return fuzzy;
  const keys=Object.keys(vs);
  if(keys.length===1)return keys[0];
- if(keys.length){return keys.sort((a,b)=>Number(vs[b]||0)-Number(vs[a]||0))[0]}
- return person||'Servis Aracı';
+ return person.split(/\s+[·-]\s+/)[0]||person||'Servis Aracı';
 }
 function syncStockForCurrentUser(){
  const person=currentName()||'';
@@ -237,7 +245,7 @@ function openStockHistory(){const arr=(state.stockMovements||[]).slice(0,100);op
 function toggleMaintCustom(){const v=formVal('sMaintPeriod');const r=document.getElementById('maintCustomRow');if(r)r.classList.toggle('hidden',v!=='custom')}
 function maintenanceNextDate(period){if(period==='custom')return formVal('sMaintDate');const m=Number(period||0);if(!m)return '';const d=new Date();d.setMonth(d.getMonth()+m);return todayKey(d)}
 async function readPhotos(files){const out=[];for(const f of [...files].slice(0,5)){out.push(await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(f)}))}return out}
-async function completeService(apptId){const name=titleTR(formVal('sName'));if(!name)return alert('Müşteri adı gerekli.');const cleanAddr=cleanAddress(formVal('sAddress'));let customer=state.customers.find(c=>c.id===sheetBody.dataset.customerId)||findCustomerMatch(name,formVal('sPhone'),cleanAddr);if(!customer){if(!can('createCustomer'))return alert('Müşteri kayıtlı değil. Bu kullanıcı yeni müşteri oluşturamaz.');customer={id:uuid(),name,phone:formVal('sPhone'),address:cleanAddr,createdAt:nowISO(),createdBy:currentName(),active:true};state.customers.unshift(customer);save('customers',customer.id,customer)}const partId=formVal('sPart'),source=formVal('sSource'),partQty=Math.max(1,Math.floor(numVal('sPartQty')||1));let partName='',partListPrice=0,partAppliedPrice=0,partDiscount=0;if(partId){if(!source)return alert('Yedek parça seçildi. Parçanın Araçtan mı Ana Depodan mı alındığını seçmeden servis tamamlanamaz.');const p=state.stock.find(x=>x.id===partId);if(p){partName=p.name;partListPrice=numVal('sPartListPrice');partAppliedPrice=numVal('sPartAppliedPrice');partDiscount=Math.max(0,partListPrice-partAppliedPrice);if(partListPrice>0&&partAppliedPrice<partListPrice*0.5&&!confirm(`Uygulanan parça fiyatı liste fiyatının yarısından düşük. ${money(partListPrice)} yerine ${money(partAppliedPrice)} kaydedilsin mi?`))return;if(source==='vehicle'){const available=serviceVehicleQty(p);if(available<partQty)return alert(`Araçta yeterli adet yok. Görülen: ${available} · İstenen: ${partQty}`);p.vehicle=available-partQty;const vk=serviceVehicleKey(p);p.vehicles=p.vehicles||{};if(vk)p.vehicles[vk]=p.vehicle}else if(source==='warehouse'){if(Number(p.warehouse||0)<partQty)return alert('Depoda yeterli adet yok.');p.warehouse=Number(p.warehouse||0)-partQty}else return alert('Parça kaynağını seçin.');p.updatedAt=nowISO();save('stock',p.id,p);addStockMovement(p,'Serviste Kullanıldı',partQty,{source,customerName:name,customerId:customer.id,amount:partAppliedPrice,note:`Liste ${money(partListPrice)} · Uygulanan ${money(partAppliedPrice)} · İndirim ${money(partDiscount)}`});if(source==='vehicle'&&Number(p.vehicle)<Number(p.target||0))addEvent('Araç stok eksiği',`${p.name} araçta ${p.vehicle}/${p.target}. Yerine koy.`,p.id)}}const photos=await readPhotos(document.getElementById('sPhotos')?.files||[]);const s={id:uuid(),serviceNo:String(Date.now()).slice(-6),customerId:customer.id,customerName:name,phone:formVal('sPhone'),address:cleanAddr,deviceBrand:titleTR(formVal('sBrand')),deviceModel:formVal('sModel'),issue:formVal('sIssue'),workDone:formVal('sWork'),note:formVal('sNote'),partId,partName,partQty,stockSource:source,partListPrice,partAppliedPrice,partDiscount,amount:numVal('sAmount'),payment:formVal('sPayment'),invoicePending:formVal('sPayment')==='Havale',warranty:!!document.getElementById('sWarranty')?.checked,warrantyMonths:Number(document.getElementById('sWarrantyMonths')?.value||12),maintenancePeriod:formVal('sMaintPeriod')||'0',maintenanceNextDate:maintenanceNextDate(formVal('sMaintPeriod')),photos,technicianId:emp()?.id,technicianName:currentName(),appointmentId:apptId||'',createdAt:nowISO(),pcExported:false};state.serviceRecords.unshift(s);save('serviceRecords',s.id,s);if(s.maintenanceNextDate){const mr={id:uuid(),customerId:customer.id,serviceId:s.id,customerName:name,phone:s.phone,address:s.address,deviceBrand:s.deviceBrand,deviceModel:s.deviceModel,period:s.maintenancePeriod,nextDate:s.maintenanceNextDate,status:'open',createdAt:nowISO(),createdBy:currentName()};state.maintenanceReminders.unshift(mr);save('maintenanceReminders',mr.id,mr)}if(apptId){const a=state.appointments.find(x=>x.id===apptId);if(a){a.status='done';a.completedAt=s.createdAt;a.serviceId=s.id;save('appointments',a.id,a)}}addEvent('Servis tamamlandı',`${currentName()}: ${name} · ${s.workDone||'Servis'} · ${money(s.amount)}`,s.id);announce(`Onur Teknik Servis. ${titleTR(name)} için servis hizmeti tamamlandı ve sistemimize kaydedildi. Teşekkür ederiz.`);closeSheet();renderAll();openService(s.id)}
+async function completeService(apptId){const name=titleTR(formVal('sName'));if(!name)return alert('Müşteri adı gerekli.');const cleanAddr=cleanAddress(formVal('sAddress'));let customer=state.customers.find(c=>c.id===sheetBody.dataset.customerId)||findCustomerMatch(name,formVal('sPhone'),cleanAddr);if(!customer){if(!can('createCustomer'))return alert('Müşteri kayıtlı değil. Bu kullanıcı yeni müşteri oluşturamaz.');customer={id:uuid(),name,phone:formVal('sPhone'),address:cleanAddr,createdAt:nowISO(),createdBy:currentName(),active:true};state.customers.unshift(customer);save('customers',customer.id,customer)}const partId=formVal('sPart'),source=formVal('sSource'),partQty=Math.max(1,Math.floor(numVal('sPartQty')||1));let partName='',partListPrice=0,partAppliedPrice=0,partDiscount=0;if(partId){if(!source)return alert('Yedek parça seçildi. Parçanın Araçtan mı Ana Depodan mı alındığını seçmeden servis tamamlanamaz.');const p=state.stock.find(x=>x.id===partId);if(p){partName=p.name;partListPrice=numVal('sPartListPrice');partAppliedPrice=numVal('sPartAppliedPrice');partDiscount=Math.max(0,partListPrice-partAppliedPrice);if(partListPrice>0&&partAppliedPrice<partListPrice*0.5&&!confirm(`Uygulanan parça fiyatı liste fiyatının yarısından düşük. ${money(partListPrice)} yerine ${money(partAppliedPrice)} kaydedilsin mi?`))return;if(source==='vehicle'){const available=Math.max(0,Number(p.vehicle||serviceVehicleQty(p)||0));if(available<partQty)return alert(`Araçta yeterli adet yok. Görülen: ${available} · İstenen: ${partQty}`);p.vehicle=available-partQty;const vk=serviceVehicleKey(p);p.vehicles=p.vehicles||{};if(vk)p.vehicles[vk]=p.vehicle}else if(source==='warehouse'){if(Number(p.warehouse||0)<partQty)return alert('Depoda yeterli adet yok.');p.warehouse=Number(p.warehouse||0)-partQty}else return alert('Parça kaynağını seçin.');p.updatedAt=nowISO();save('stock',p.id,p);addStockMovement(p,'Serviste Kullanıldı',partQty,{source,customerName:name,customerId:customer.id,amount:partAppliedPrice,note:`Liste ${money(partListPrice)} · Uygulanan ${money(partAppliedPrice)} · İndirim ${money(partDiscount)}`});if(source==='vehicle'&&Number(p.vehicle)<Number(p.target||0))addEvent('Araç stok eksiği',`${p.name} araçta ${p.vehicle}/${p.target}. Yerine koy.`,p.id)}}const photos=await readPhotos(document.getElementById('sPhotos')?.files||[]);const s={id:uuid(),serviceNo:String(Date.now()).slice(-6),customerId:customer.id,customerName:name,phone:formVal('sPhone'),address:cleanAddr,deviceBrand:titleTR(formVal('sBrand')),deviceModel:formVal('sModel'),issue:formVal('sIssue'),workDone:formVal('sWork'),note:formVal('sNote'),partId,partName,partQty,stockSource:source,partListPrice,partAppliedPrice,partDiscount,amount:numVal('sAmount'),payment:formVal('sPayment'),invoicePending:formVal('sPayment')==='Havale',warranty:!!document.getElementById('sWarranty')?.checked,warrantyMonths:Number(document.getElementById('sWarrantyMonths')?.value||12),maintenancePeriod:formVal('sMaintPeriod')||'0',maintenanceNextDate:maintenanceNextDate(formVal('sMaintPeriod')),photos,technicianId:emp()?.id,technicianName:currentName(),appointmentId:apptId||'',createdAt:nowISO(),pcExported:false};state.serviceRecords.unshift(s);save('serviceRecords',s.id,s);if(s.maintenanceNextDate){const mr={id:uuid(),customerId:customer.id,serviceId:s.id,customerName:name,phone:s.phone,address:s.address,deviceBrand:s.deviceBrand,deviceModel:s.deviceModel,period:s.maintenancePeriod,nextDate:s.maintenanceNextDate,status:'open',createdAt:nowISO(),createdBy:currentName()};state.maintenanceReminders.unshift(mr);save('maintenanceReminders',mr.id,mr)}if(apptId){const a=state.appointments.find(x=>x.id===apptId);if(a){a.status='done';a.completedAt=s.createdAt;a.serviceId=s.id;save('appointments',a.id,a)}}addEvent('Servis tamamlandı',`${currentName()}: ${name} · ${s.workDone||'Servis'} · ${money(s.amount)}`,s.id);announce(`Onur Teknik Servis. ${titleTR(name)} için servis hizmeti tamamlandı ve sistemimize kaydedildi. Teşekkür ederiz.`);closeSheet();renderAll();openService(s.id)}
 function setServiceFilter(v,btn){serviceFilter=v;document.querySelectorAll('#serviceFilters .chip').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderServices()}
 function renderServices(){if(!can('viewServiceHistory')&&!isAdmin()){serviceList.innerHTML='<div class="notice">Bu kullanıcı geçmiş servis kayıtlarını göremez. Yalnız kendisine düşen randevudan servis formu açabilir.</div>';return}const q=(document.getElementById('serviceSearch')?.value||'').toLocaleLowerCase('tr-TR');let arr=state.serviceRecords.filter(s=>[s.customerName,s.phone,s.serviceNo,s.workDone,s.issue,s.address].some(v=>String(v||'').toLocaleLowerCase('tr-TR').includes(q)));if(serviceFilter==='today')arr=arr.filter(s=>todayKey(new Date(s.createdAt))===todayKey());if(serviceFilter==='month')arr=arr.filter(s=>String(s.createdAt||'').slice(0,7)===todayKey().slice(0,7));serviceList.innerHTML=arr.length?arr.map(serviceHTML).join(''):'<div class="empty">Servis kaydı yok.</div>'}
 function serviceHTML(s){return `<div class="item"><div class="row"><div><span class="tag green">Tamamlandı</span><b style="display:block;margin-top:6px">#${esc(s.serviceNo||'')} · ${esc(s.customerName)}</b><div class="meta">${fmtDateTime(s.createdAt)} · ${esc(s.technicianName||'')}</div><div class="meta">${esc(s.workDone||s.issue||'')}</div>${s.invoicePending?'<div class="meta"><b>Havale · Fatura bekliyor</b></div>':''}</div><div>${can('viewAmounts')?`<div class="amount">${money(s.amount)}</div>`:''}<button class="btn light sm" style="margin-top:6px" onclick="openService('${s.id}')">Aç</button></div></div></div>`}
@@ -388,66 +396,44 @@ function exportPCDate(){const d=formVal('pcDate');const rows=state.serviceRecord
 function openQuickAdd(){if(!emp())return openLogin();const buttons=[];if(can('createAppointment'))buttons.push(`<button class="btn red" onclick="openAppointmentForm()">Yeni Randevu</button>`);if(can('customerSearch'))buttons.push(`<button class="btn" onclick="openSmartCall()">Akıllı Çağrı / Görüşme Özeti</button>`);if(can('completeService'))buttons.push(`<button class="btn" onclick="openStandaloneService()">Yeni Servis Kaydı</button>`);if(can('customerSearch'))buttons.push(`<button class="btn light" onclick="openCustomerSearch()">Müşteri Ara</button>`);openSheet('Hızlı İşlem',`<div class="actions" style="flex-direction:column">${buttons.join('')||'<div class="notice">Bu kullanıcı için hızlı kayıt menüsü kapalı.</div>'}</div>`)}
 function openSyncSheet(){if(!isAdmin())return;openSheet('Ortak Telefon Senkronu',`<div class="notice info"><b>Onur Teknik bulut ayarları hazır.</b><br>Telefon buluta otomatik bağlanır. Firebase şifresi telefona yazılmaz ve istenmez.</div><label>Çalışma kodu</label><input value="ONURTEKNIK" disabled><label>Bağlantı yöntemi</label><input value="Otomatik güvenli oturum" disabled><div id="cloudDiag" style="display:none;margin-top:12px;padding:12px;border-radius:12px;background:#111827;color:#fff;white-space:pre-wrap;font:600 13px/1.45 system-ui"></div><div class="actions"><button class="btn red" onclick="runCloudDiagnostic()">Bulut Bağlantısını Kontrol Et</button></div>`) }
 
-function withCloudTimeout(promise,ms,label){
- return Promise.race([
-  promise,
-  new Promise((_,reject)=>setTimeout(()=>reject(new Error('ZAMAN_ASIMI: '+label)),ms))
- ])
-}
-async function ensureFirebaseLoaded(){
- if(window.firebase)return;
- await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js'),12000,'Firebase uygulama dosyası');
- await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js'),12000,'Firebase giriş dosyası');
- await withCloudTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js'),12000,'Firebase veritabanı dosyası');
-}
-async function connectCloudCore(statusCb){
- const tell=t=>{try{statusCb&&statusCb(t)}catch{}};
- if(!cloudConfig.apiKey||!cloudConfig.databaseURL)throw new Error('Bulut ayarları eksik');
- tell('1/4 Firebase hazırlanıyor...');
- await ensureFirebaseLoaded();
- if(!firebase.apps.length)firebase.initializeApp(cloudConfig);
- const auth=firebase.auth();
- tell('2/4 Anonim güvenli oturum açılıyor...');
- // Mobil WebView/Chrome'da LOCAL persistence bazı cihazlarda IndexedDB beklemesine takılabiliyor.
- // Cep Asistan her açılışta anonim oturumu yeniden kurabildiği için kalıcı oturum zorunlu değil.
- // Bu nedenle persistence hazırlama adımını tamamen atlayıp doğrudan anonim giriş yapıyoruz.
- if(!auth.currentUser)await withCloudTimeout(auth.signInAnonymously(),12000,'Anonim Firebase girişi');
- tell('3/4 Ortak stok okunuyor...');
- cloud=firebase.database().ref('workspaces/'+(cloudConfig.workspace||'ONURTEKNIK'));
- const stockSnap=await withCloudTimeout(cloud.child('stock').once('value'),12000,'Ortak stok okuma');
- remoteReady=true; setSync('on','Bulut bağlantısı açık');
- tell('4/4 Bağlantı açık ✓');
- return stockSnap;
-}
 async function runCloudDiagnostic(){
  const box=document.getElementById('cloudDiag'); if(!box)return;
- box.style.display='block';
+ box.style.display='block'; box.textContent='Bulut bağlantısı kontrol ediliyor...';
+ await initCloud();
+ if(!remoteReady){box.textContent='BAĞLANTI KURULAMADI\nÜstteki bulut durumuna bakın.';return}
  try{
-  const a=await connectCloudCore(t=>box.textContent=t);
-  box.textContent='BULUT BAĞLANTISI AÇIK ✓\nStok okuma: '+(a.exists()?'BAŞARILI ✓':'Kayıt yok')+'\nOtomatik oturum: BAŞARILI ✓';
- }catch(e){
-  remoteReady=false;setSync('err','Bulut bağlantısı kurulamadı');
-  const code=String(e?.code||''); const msg=String(e?.message||e);
-  box.textContent='BAĞLANTI HATASI\n'+(code?code+'\n':'')+msg+'\n\nBu mesajı fotoğraf olarak gönderin.';
- }
+   const a=await cloud.child('stock').once('value');
+   box.textContent='BULUT BAĞLANTISI AÇIK ✓\nStok okuma: '+(a.exists()?'BAŞARILI ✓':'Kayıt yok')+'\nŞifre girişi gerekmiyor.';
+ }catch(e){box.textContent='BULUT OKUMA HATASI\n'+String(e?.code||'')+'\n'+String(e?.message||e)}
 }
 function saveCloudConfig(){closeSheet();initCloud()}
 function setSync(cls,text){syncStatus.innerHTML=`<span class="syncdot ${cls||''}"></span>${esc(text)}`}
-function loadScript(src){return new Promise((res,rej)=>{const old=[...document.scripts].find(x=>x.src===src);if(old){if(window.firebase)return res();old.addEventListener('load',res,{once:true});old.addEventListener('error',rej,{once:true});return}const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Dosya yüklenemedi: '+src));document.head.appendChild(s)})}
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 async function initCloud(){
+ if(!cloudConfig.apiKey||!cloudConfig.databaseURL){remoteReady=false;setSync('','Bulut bağlantısı kapalı');return}
  try{
-  await connectCloudCore();
+  if(!window.firebase){await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js')}
+  if(!firebase.apps.length)firebase.initializeApp(cloudConfig);
+  const auth=firebase.auth(); await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  // Mevcut geçerli oturumu koru; oturum yoksa anonim olarak otomatik bağlan.
+  if(!auth.currentUser)await auth.signInAnonymously();
+  cloud=firebase.database().ref('workspaces/'+(cloudConfig.workspace||'ONURTEKNIK'));
+  // İlk okuma gerçekten başarılı olmadan "bağlı" deme.
+  await cloud.child('stock').once('value');
+  remoteReady=true;setSync('on','Bulut bağlantısı açık');
   const sections=['employees','customers','firms','appointments','serviceRecords','stock','stockMovements','vehicleLoans','attendance','managerEvents','maintenanceReminders','financeQueue','receivablesQueue','pendingTransferQueue','firmMovementsQueue'];
   for(const section of sections){
-   cloud.child(section).off('value');
    cloud.child(section).on('value',snap=>{let arr=Object.values(snap.val()||{});if(section==='stock')arr=normalizeCloudStock(arr);if(arr.length||snap.exists()){state[section]=arr;state.employees.forEach(e=>{if(!e.permissions)e.permissions=e.role==='admin'?ALL_PERMS:(e.name?.toLowerCase()==='talha'?TALHA_PERMS:LIMITED_PERMS)});saveLocal();renderAll()}});
+   const sec=await cloud.child(section).once('value');
+   if(section!=='stock'&&!sec.exists()&&state[section]?.length){for(const r of state[section])await cloud.child(section+'/'+r.id).set(r)}
   }
-  cloud.child('settings').off('value');
   cloud.child('settings').on('value',x=>{if(x.exists()){state.settings={...state.settings,...x.val()};saveLocal();renderHeader()}});
+  const ss=await cloud.child('settings').once('value');if(!ss.exists())await cloud.child('settings').set(state.settings)
  }catch(e){
   console.error('Firebase bağlantı hatası',e);remoteReady=false;
-  const code=String(e?.code||''),msg=String(e?.message||e);
-  if(code.includes('permission-denied'))setSync('err','Bulut erişim izni yok');else if(msg.includes('ZAMAN_ASIMI'))setSync('err','Bulut bağlantısı zaman aşımı');else setSync('err','Bulut bağlantısı kurulamadı');
+  const code=String(e?.code||'BILINMEYEN'),msg=String(e?.message||'');
+  if(code.includes('permission-denied'))setSync('err','Bulut erişim izni yok');else setSync('err','Bulut bağlantısı kurulamadı');
+  try{alert('Bulut bağlantısı kurulamadı\n'+code+'\n'+msg)}catch{}
  }
 }
 function renderAll(){syncStockForCurrentUser();renderHeader();renderAttendance();renderHome();renderAppointments();renderServices();renderStock();renderMore()}
