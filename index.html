@@ -407,8 +407,10 @@ async function connectCloudCore(statusCb){
  await ensureFirebaseLoaded();
  if(!firebase.apps.length)firebase.initializeApp(cloudConfig);
  const auth=firebase.auth();
- tell('2/4 Güvenli oturum açılıyor...');
- await withCloudTimeout(auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL),8000,'Oturum hazırlama');
+ tell('2/4 Anonim güvenli oturum açılıyor...');
+ // Mobil WebView/Chrome'da LOCAL persistence bazı cihazlarda IndexedDB beklemesine takılabiliyor.
+ // Cep Asistan her açılışta anonim oturumu yeniden kurabildiği için kalıcı oturum zorunlu değil.
+ // Bu nedenle persistence hazırlama adımını tamamen atlayıp doğrudan anonim giriş yapıyoruz.
  if(!auth.currentUser)await withCloudTimeout(auth.signInAnonymously(),12000,'Anonim Firebase girişi');
  tell('3/4 Ortak stok okunuyor...');
  cloud=firebase.database().ref('workspaces/'+(cloudConfig.workspace||'ONURTEKNIK'));
